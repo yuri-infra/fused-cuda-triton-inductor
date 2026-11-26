@@ -1,5 +1,5 @@
 """
-项目三实机评测套件（ABA 多轮交替中位数协议 + 修正梯度基线显存统计 + 实测 D2D 持续带宽天花板 + PTX 汇编核验）
+fused-cuda-triton-inductor 实机评测套件（ABA 多轮交替中位数协议 + 修正梯度基线显存统计 + 实测 D2D 持续带宽天花板 + PTX 汇编核验）
 
 改进说明（对应红方复核标准）：
 1. 显存计量修正：在 `bench_fused_linear_cross_entropy` 的 Warmup 后显式执行 `h.grad = None; w.grad = None` 再记录 `base_mem`，
@@ -430,7 +430,7 @@ def main():
     ms_1024, tot_1024, act_1024 = r_ce["f1024"]
 
     lines = [
-        "# 项目三实机性能验证报告（ABA 五轮中位数对照 · 修正显存基线 · 含 PTX 汇编与 D2D 带宽审计）",
+        "# `fused-cuda-triton-inductor` 实机性能验证报告（ABA 五轮中位数对照 · 修正显存基线 · 含 PTX 汇编与 D2D 带宽审计）",
         "",
         f"- **实测时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"- **实测硬件**：`{props.name}`（CC `{props.major}.{props.minor}`，`{props.multi_processor_count}` SMs，显存 `{props.total_memory / (1024**3):.2f} GB`）",

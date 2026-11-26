@@ -1,4 +1,4 @@
-# 项目三实机性能验证报告（ABA 五轮中位数对照 · 修正显存基线 · 含 PTX 汇编与 D2D 带宽审计）
+# `fused-cuda-triton-inductor` 实机性能验证报告（ABA 五轮中位数对照 · 修正显存基线 · 含 PTX 汇编与 D2D 带宽审计）
 
 - **实测时间**：2026-11-19 22:09:09
 - **实测硬件**：`NVIDIA GeForce RTX 5060 Laptop GPU`（CC `12.0`，`26` SMs，显存 `7.93 GB`）

@@ -1,5 +1,5 @@
 """
-AI Infra Project 3: PyTorch 2.x TorchInductor ATen Post-Grad Fusion Pass + Native CUDA C++ (.cu) & Triton Kernels
+fused-cuda-triton-inductor: PyTorch 2.x TorchInductor ATen Post-Grad Fusion Pass + Native CUDA C++ (.cu) & Triton Kernels
 """
 
 from .cuda_ext import (

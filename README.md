@@ -1,16 +1,16 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-light.svg">
-  <img alt="fused-cuda-triton-inductor — GPU Systems Lab 01" src="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-light.svg" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-dark.svg?v=3">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-light.svg?v=3">
+  <img alt="fused-cuda-triton-inductor — GPU Systems Lab 01" src="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-light.svg?v=3" width="100%">
 </picture>
 
 <p align="center">
-  <a href="https://yuri-infra.github.io/#kernels"><strong>⚡ Live Benchmark Lab ↗</strong></a> &nbsp;·&nbsp;
+  <a href="https://yuri-infra.github.io/#kernels"><strong>⚡ Live Lab ↗</strong></a> &nbsp;·&nbsp;
   <a href="#system-architecture"><strong>Architecture</strong></a> &nbsp;·&nbsp;
-  <a href="benchmarks/local_gpu_benchmark_report.md"><strong>Benchmark Report</strong></a> &nbsp;·&nbsp;
-  <a href="tests/test_all.py"><strong>Test Suite (8/8)</strong></a> &nbsp;·&nbsp;
-  <a href="csrc/fused_add_rmsnorm_cuda.cu"><strong>CUDA C++ Kernel</strong></a> &nbsp;·&nbsp;
-  <a href="https://github.com/yuri-infra"><strong>← yuri-infra Profile</strong></a>
+  <a href="benchmarks/local_gpu_benchmark_report.md"><strong>Benchmarks</strong></a> &nbsp;·&nbsp;
+  <a href="tests/test_all.py"><strong>Tests (8/8)</strong></a> &nbsp;·&nbsp;
+  <a href="csrc/fused_add_rmsnorm_cuda.cu"><strong>CUDA (.cu)</strong></a> &nbsp;·&nbsp;
+  <a href="https://github.com/yuri-infra"><strong>← Profile</strong></a>
 </p>
 
 <p align="center">
@@ -28,9 +28,9 @@
 ## System Architecture
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-light.svg">
-  <img alt="TorchInductor Post-Grad ATen Rewrite and Dual-Backend Dispatch Architecture" src="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-light.svg" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-dark.svg?v=3">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-light.svg?v=3">
+  <img alt="TorchInductor Post-Grad ATen Rewrite and Dual-Backend Dispatch Architecture" src="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-light.svg?v=3" width="100%">
 </picture>
 
 ---

@@ -1,8 +1,36 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-light.svg">
+  <img alt="fused-cuda-triton-inductor — GPU Systems Lab 01" src="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-light.svg" width="100%">
+</picture>
+
+<p align="center">
+  <a href="#system-architecture"><strong>Architecture</strong></a> &nbsp;·&nbsp;
+  <a href="benchmarks/local_gpu_benchmark_report.md"><strong>Benchmark Report</strong></a> &nbsp;·&nbsp;
+  <a href="tests/test_all.py"><strong>Test Suite (8/8)</strong></a> &nbsp;·&nbsp;
+  <a href="csrc/fused_add_rmsnorm_cuda.cu"><strong>CUDA C++ Kernel</strong></a> &nbsp;·&nbsp;
+  <a href="https://github.com/yuri-infra"><strong>← yuri-infra Profile</strong></a>
+</p>
+
+<p align="center">
+  <code>CUDA C++ (.cu)</code> &nbsp;<code>OpenAI Triton 3.7</code> &nbsp;<code>PyTorch 2.x Inductor</code> &nbsp;<code>Core ATen IR</code> &nbsp;<code>c10::Dispatcher</code> &nbsp;<code>RTX 5060 sm_120</code>
+</p>
+
 # 项目三：PyTorch 2.x Inductor ATen 图重写与 CUDA C++ / Triton 算子库
 
 本工程针对大模型推理与训练中的两类算子及编译问题提供可复现、带编译期/运行期双重硬计数核验的实现：
 1. **训练侧跨 GEMM 与大词表规约显存瓶颈（`Fused Linear + Cross-Entropy`）**：原生 `torch.compile` 无法跨越 cuBLAS 矩阵乘融合 12.8 万~15.2 万词表交叉熵损失，仍需物化完整 `[B*S, Vocab]` 张量；本工程通过分块矩阵乘 + Triton Online-Softmax 原位求导消除 `[M, V]` 中间张量，并针对 FP16 设计 `2^-4` 指数移位预缩放与尾端寄存器 FP32 延迟归一化，杜绝大词表非目标词梯度下溢归零。
 2. **推理侧 TorchInductor `post_grad` 图算融合与纯 C++ 算子注册**：面向推理图（`torch.inference_mode()` / `torch.no_grad()`），基于 `torch._inductor.pattern_matcher` 在 Core ATen IR 层覆盖主流 RMSNorm 方言（含 HuggingFace 官方 `Qwen2RMSNorm` / `LlamaRMSNorm` 及原生 `F.rms_norm`）、异构头 GQA Q+K RoPE 与 SwiGLU，并通过 `TORCH_LIBRARY_IMPL(ai_infra, CUDA, m)` 将 `.cu` 算子直接注册至 `c10::Dispatcher` 以消除 Python 回调税。
+
+---
+
+## System Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-light.svg">
+  <img alt="TorchInductor Post-Grad ATen Rewrite and Dual-Backend Dispatch Architecture" src="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-light.svg" width="100%">
+</picture>
 
 ---
 

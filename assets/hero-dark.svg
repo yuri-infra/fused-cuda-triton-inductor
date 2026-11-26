@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="850" height="190" viewBox="0 0 850 190" role="img">
+  <defs>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; }
+      .mono { font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; }
+      .pkt { stroke-linecap: round; fill: none; }
+      .flow-f1 { stroke-dasharray: 24 216; animation: flowFwd 3.2s linear infinite; }
+      .flow-f2 { stroke-dasharray: 20 220; animation: flowFwd 3.8s linear -1.2s infinite; }
+      .flow-f3 { stroke-dasharray: 18 222; animation: flowFwd 2.8s linear -0.7s infinite; }
+      .flow-r1 { stroke-dasharray: 22 218; animation: flowRev 3.6s linear -0.5s infinite; }
+      .flow-ring1 { stroke-dasharray: 34 386; animation: flowRing 4.2s linear infinite; }
+      .flow-ring2 { stroke-dasharray: 34 386; animation: flowRing 4.2s linear -2.1s infinite; }
+      .pulse { animation: pulseDot 2.4s ease-in-out infinite; }
+      @keyframes flowFwd { from { stroke-dashoffset: 240; } to { stroke-dashoffset: 0; } }
+      @keyframes flowRev { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 240; } }
+      @keyframes flowRing { from { stroke-dashoffset: 420; } to { stroke-dashoffset: 0; } }
+      @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+      
+    </style>
+    <clipPath id="clip-card-dark-emerald">
+      <rect x="1" y="1" width="848" height="188" rx="10"/>
+    </clipPath>
+    <pattern id="grid24-dark-emerald" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#182232" stroke-width="0.7" stroke-opacity="0.65"/>
+      <circle cx="0" cy="0" r="0.9" fill="#263244" fill-opacity="0.45"/>
+    </pattern>
+    <radialGradient id="rad-dark-emerald" cx="82%" cy="32%" r="48%">
+      <stop offset="0%" stop-color="#34d399" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#34d399" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow-dark-emerald" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.0" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    
+  </defs>
+
+  <!-- Base Architectural Card -->
+  <g clip-path="url(#clip-card-dark-emerald)">
+    <rect x="1" y="1" width="848" height="188" fill="#0f1520"/>
+    <rect x="1" y="1" width="848" height="188" fill="url(#grid24-dark-emerald)"/>
+    <rect x="1" y="1" width="848" height="188" fill="url(#rad-dark-emerald)"/>
+    <!-- Left Domain Accent Spine -->
+    <rect x="1" y="1" width="4.5" height="188" fill="#34d399"/>
+  </g>
+  <rect x="1" y="1" width="848" height="188" rx="10" fill="none" stroke="#263244" stroke-width="1"/>
+  <g fill="none" stroke="#34d399" stroke-width="1.5" stroke-opacity="0.58" stroke-linecap="square"><path d="M 12.0 19.0 L 12.0 10.0 L 21.0 10.0"/><path d="M 829.0 10.0 L 838.0 10.0 L 838.0 19.0"/><path d="M 12.0 171.0 L 12.0 180.0 L 21.0 180.0"/><path d="M 829.0 180.0 L 838.0 180.0 L 838.0 171.0"/></g>
+  <circle cx="32" cy="29" r="3.5" fill="#34d399" class="pulse" filter="url(#glow-dark-emerald)"/>
+  <text x="42" y="32.5" class="mono" font-size="10" font-weight="700" fill="#34d399" letter-spacing="1.1">YURI-INFRA // GPU SYSTEMS LAB · 01</text>
+  <text x="28" y="64" class="sans" font-size="25" font-weight="800" fill="#f0f6fc" letter-spacing="-0.4">fused-cuda-triton-inductor</text>
+  <text x="28" y="87" class="sans" font-size="12.5" font-weight="500" fill="#c9d1d9">PyTorch 2.x Inductor ATen 图重写 · 原生 CUDA C++ (.cu) 与 Triton 算子库</text>
+  <text x="28" y="108" class="mono" font-size="9.8" fill="#8b949e">RTX 5060 sm_120 (312.6 GB/s D2D) · PyTorch 2.13+cu130 · Triton 3.7 · ABA-5</text>
+  <line x1="28" y1="118" x2="536" y2="118" stroke="#1e2a3a" stroke-width="1"/>
+  <rect x="554" y="18" width="272" height="98" rx="7" fill="#161b22" stroke="#263244" stroke-width="1"/>
+  <g fill="none" stroke="#34d399" stroke-width="1.5" stroke-opacity="0.52" stroke-linecap="square"><path d="M 559.0 27.5 L 559.0 22.0 L 564.5 22.0"/><path d="M 815.5 22.0 L 821.0 22.0 L 821.0 27.5"/><path d="M 559.0 106.5 L 559.0 112.0 L 564.5 112.0"/><path d="M 815.5 112.0 L 821.0 112.0 L 821.0 106.5"/></g>
+  <text x="568" y="34.5" class="mono" font-size="8.2" font-weight="700" fill="#34d399" letter-spacing="0.7">WARP SHUFFLE // ld.v4.u32</text>
+  <text x="813" y="34.5" class="mono" font-size="7.8" fill="#8b949e" text-anchor="end">32T SIMT</text>
+  <rect x="568" y="43" width="44" height="12" rx="3" fill="#06281e" stroke="#0f5c43" stroke-width="0.9"/><text x="590" y="52" class="mono" font-size="8" font-weight="700" fill="#34d399" text-anchor="middle">v4.L0</text>
+  <line x1="612" y1="49" x2="744" y2="49" stroke="#34d399" stroke-opacity="0.42" stroke-width="1.3"/>
+  <rect x="568" y="59" width="44" height="12" rx="3" fill="#06281e" stroke="#0f5c43" stroke-width="0.9"/><text x="590" y="68" class="mono" font-size="8" font-weight="700" fill="#34d399" text-anchor="middle">v4.L1</text>
+  <line x1="612" y1="65" x2="744" y2="65" stroke="#34d399" stroke-opacity="0.42" stroke-width="1.3"/>
+  <rect x="568" y="75" width="44" height="12" rx="3" fill="#06281e" stroke="#0f5c43" stroke-width="0.9"/><text x="590" y="84" class="mono" font-size="8" font-weight="700" fill="#34d399" text-anchor="middle">v4.L2</text>
+  <line x1="612" y1="81" x2="744" y2="81" stroke="#34d399" stroke-opacity="0.42" stroke-width="1.3"/>
+  <rect x="568" y="91" width="44" height="12" rx="3" fill="#06281e" stroke="#0f5c43" stroke-width="0.9"/><text x="590" y="100" class="mono" font-size="8" font-weight="700" fill="#34d399" text-anchor="middle">v4.L3</text>
+  <line x1="612" y1="97" x2="744" y2="97" stroke="#34d399" stroke-opacity="0.42" stroke-width="1.3"/>
+  <path d="M 628 49 C 642 49, 654 65, 668 65" fill="none" stroke="#34d399" stroke-opacity="0.34" stroke-width="1.15"/>
+  <path d="M 628 65 C 642 65, 654 49, 668 49" fill="none" stroke="#34d399" stroke-opacity="0.34" stroke-width="1.15"/>
+  <path d="M 628 81 C 642 81, 654 97, 668 97" fill="none" stroke="#34d399" stroke-opacity="0.34" stroke-width="1.15"/>
+  <path d="M 628 97 C 642 97, 654 81, 668 81" fill="none" stroke="#34d399" stroke-opacity="0.34" stroke-width="1.15"/>
+  <path d="M 684 49 C 700 49, 714 81, 730 81" fill="none" stroke="#34d399" stroke-opacity="0.34" stroke-width="1.15"/>
+  <path d="M 684 81 C 700 81, 714 49, 730 49" fill="none" stroke="#34d399" stroke-opacity="0.34" stroke-width="1.15"/>
+  <path d="M 684 65 C 700 65, 714 97, 730 97" fill="none" stroke="#34d399" stroke-opacity="0.34" stroke-width="1.15"/>
+  <path d="M 684 97 C 700 97, 714 65, 730 65" fill="none" stroke="#34d399" stroke-opacity="0.34" stroke-width="1.15"/>
+  <path d="M 612 49 L 628 49 C 642 49, 654 65, 668 65 L 684 65 C 700 65, 714 97, 730 97 L 748 97" class="pkt flow-f1" stroke="#6ee7b7" stroke-width="2.0" filter="url(#glow-dark-emerald)"/>
+  <path d="M 612 81 L 628 81 C 642 81, 654 97, 668 97 L 684 97 C 700 97, 714 65, 730 65 L 748 65" class="pkt flow-f2" stroke="#6ee7b7" stroke-width="2.0" filter="url(#glow-dark-emerald)"/>
+  <path d="M 612 97 L 628 97 C 642 97, 654 81, 668 81 L 684 81 C 700 81, 714 49, 730 49 L 748 49" class="pkt flow-f3" stroke="#6ee7b7" stroke-width="2.0" filter="url(#glow-dark-emerald)"/>
+  <circle cx="628" cy="49" r="2.0" fill="#34d399"/>
+  <circle cx="628" cy="65" r="2.0" fill="#34d399"/>
+  <circle cx="628" cy="81" r="2.0" fill="#34d399"/>
+  <circle cx="628" cy="97" r="2.0" fill="#34d399"/>
+  <circle cx="668" cy="49" r="2.0" fill="#34d399"/>
+  <circle cx="668" cy="65" r="2.0" fill="#34d399"/>
+  <circle cx="668" cy="81" r="2.0" fill="#34d399"/>
+  <circle cx="668" cy="97" r="2.0" fill="#34d399"/>
+  <circle cx="684" cy="49" r="2.0" fill="#34d399"/>
+  <circle cx="684" cy="65" r="2.0" fill="#34d399"/>
+  <circle cx="684" cy="81" r="2.0" fill="#34d399"/>
+  <circle cx="684" cy="97" r="2.0" fill="#34d399"/>
+  <circle cx="730" cy="49" r="2.0" fill="#34d399"/>
+  <circle cx="730" cy="65" r="2.0" fill="#34d399"/>
+  <circle cx="730" cy="81" r="2.0" fill="#34d399"/>
+  <circle cx="730" cy="97" r="2.0" fill="#34d399"/>
+  <rect x="748" y="42" width="66" height="60" rx="5" fill="#06281e" stroke="#34d399" stroke-width="1.3"/><circle cx="805" cy="51" r="2.6" fill="#6ee7b7" class="pulse" filter="url(#glow-dark-emerald)"/><text x="781" y="61" class="mono" font-size="9" font-weight="700" fill="#f0f6fc" text-anchor="middle">c10::</text><text x="781" y="74" class="mono" font-size="8.5" font-weight="700" fill="#34d399" text-anchor="middle">PTX .cu</text><line x1="756" y1="81" x2="806" y2="81" stroke="#0f5c43" stroke-width="0.9"/><text x="781" y="93" class="mono" font-size="7.8" fill="#c9d1d9" text-anchor="middle">311 GB/s</text>
+  <rect x="28.0" y="128.0" width="190.5" height="46" rx="6" fill="#06281e" stroke="#0f5c43" stroke-width="1"/><rect x="29.0" y="137.0" width="2.8" height="28" rx="1.4" fill="#34d399"/><text x="40.0" y="150.0" class="mono" font-size="12.5" font-weight="700" fill="#34d399">311.0 GB/s</text><text x="40.0" y="165.5" class="mono" font-size="9.1" fill="#c9d1d9">99.5% D2D Roof (.cu HBM)</text>
+  <rect x="230.5" y="128.0" width="190.5" height="46" rx="6" fill="#06281e" stroke="#0f5c43" stroke-width="1"/><rect x="231.5" y="137.0" width="2.8" height="28" rx="1.4" fill="#34d399"/><text x="242.5" y="150.0" class="mono" font-size="12.5" font-weight="700" fill="#34d399">1.40× compile</text><text x="242.5" y="165.5" class="mono" font-size="9.1" fill="#c9d1d9">11.6 μs Dual-Grid GQA RoPE</text>
+  <rect x="433.0" y="128.0" width="190.5" height="46" rx="6" fill="#06281e" stroke="#0f5c43" stroke-width="1"/><rect x="434.0" y="137.0" width="2.8" height="28" rx="1.4" fill="#34d399"/><text x="445.0" y="150.0" class="mono" font-size="12.5" font-weight="700" fill="#34d399">-74.2% VRAM</text><text x="445.0" y="165.5" class="mono" font-size="9.1" fill="#c9d1d9">128K Linear+CE · 0.99× spd</text>
+  <rect x="635.5" y="128.0" width="190.5" height="46" rx="6" fill="#06281e" stroke="#0f5c43" stroke-width="1"/><rect x="636.5" y="137.0" width="2.8" height="28" rx="1.4" fill="#34d399"/><text x="647.5" y="150.0" class="mono" font-size="12.5" font-weight="700" fill="#34d399">80 ld.v4 / 140 shfl</text><text x="647.5" y="165.5" class="mono" font-size="9.1" fill="#c9d1d9">cuobjdump Verified PTX</text>
+</svg>

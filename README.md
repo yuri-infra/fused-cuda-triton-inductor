@@ -5,6 +5,7 @@
 </picture>
 
 <p align="center">
+  <a href="https://yuri-infra.github.io/#kernels"><strong>⚡ Live Benchmark Lab ↗</strong></a> &nbsp;·&nbsp;
   <a href="#system-architecture"><strong>Architecture</strong></a> &nbsp;·&nbsp;
   <a href="benchmarks/local_gpu_benchmark_report.md"><strong>Benchmark Report</strong></a> &nbsp;·&nbsp;
   <a href="tests/test_all.py"><strong>Test Suite (8/8)</strong></a> &nbsp;·&nbsp;
@@ -16,7 +17,7 @@
   <code>CUDA C++ (.cu)</code> &nbsp;<code>OpenAI Triton 3.7</code> &nbsp;<code>PyTorch 2.x Inductor</code> &nbsp;<code>Core ATen IR</code> &nbsp;<code>c10::Dispatcher</code> &nbsp;<code>RTX 5060 sm_120</code>
 </p>
 
-# 项目三：PyTorch 2.x Inductor ATen 图重写与 CUDA C++ / Triton 算子库
+# fused-cuda-triton-inductor · PyTorch 2.x Inductor ATen 图重写与 CUDA C++ / Triton 算子库
 
 本工程针对大模型推理与训练中的两类算子及编译问题提供可复现、带编译期/运行期双重硬计数核验的实现：
 1. **训练侧跨 GEMM 与大词表规约显存瓶颈（`Fused Linear + Cross-Entropy`）**：原生 `torch.compile` 无法跨越 cuBLAS 矩阵乘融合 12.8 万~15.2 万词表交叉熵损失，仍需物化完整 `[B*S, Vocab]` 张量；本工程通过分块矩阵乘 + Triton Online-Softmax 原位求导消除 `[M, V]` 中间张量，并针对 FP16 设计 `2^-4` 指数移位预缩放与尾端寄存器 FP32 延迟归一化，杜绝大词表非目标词梯度下溢归零。
@@ -37,7 +38,7 @@
 ## 1. 目录结构
 
 ```text
-project_3_triton_compiler/
+fused-cuda-triton-inductor/
 ├── README.md
 ├── csrc/
 │   └── fused_add_rmsnorm_cuda.cu             # 原生 CUDA C++：FP16/BF16/FP32 uint4 128-bit 向量化、单 Pass 寄存器驻留、TORCH_LIBRARY_IMPL 注册

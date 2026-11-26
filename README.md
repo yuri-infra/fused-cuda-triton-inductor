@@ -1,7 +1,7 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-dark.svg?v=4">
-  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-light.svg?v=4">
-  <img alt="fused-cuda-triton-inductor — GPU Systems Lab 01" src="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-light.svg?v=4" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-dark.svg?v=5">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-light.svg?v=5">
+  <img alt="fused-cuda-triton-inductor — GPU Systems Lab 01" src="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/hero-light.svg?v=5" width="100%">
 </picture>
 
 <p align="center">
@@ -28,9 +28,9 @@
 ## System Architecture
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-dark.svg?v=4">
-  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-light.svg?v=4">
-  <img alt="TorchInductor Post-Grad ATen Rewrite and Dual-Backend Dispatch Architecture" src="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-light.svg?v=4" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-dark.svg?v=5">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-light.svg?v=5">
+  <img alt="TorchInductor Post-Grad ATen Rewrite and Dual-Backend Dispatch Architecture" src="https://raw.githubusercontent.com/yuri-infra/fused-cuda-triton-inductor/main/assets/arch-light.svg?v=5" width="100%">
 </picture>
 
 ---

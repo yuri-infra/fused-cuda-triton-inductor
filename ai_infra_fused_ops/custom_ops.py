@@ -1,26 +1,21 @@
-"""
-PyTorch 2.x CustomOp 注册中心 + 纯 C++ `TORCH_LIBRARY_IMPL` 零 Python 开销分发 + 运行期原子计数器
+"""PyTorch 2.x CustomOp 注册中心与运行期原子计数器。
 
-架构设计：
-1. `fused_rmsnorm_residual` 与 `fused_rmsnorm`：在 Python 侧声明 Schema 与 Meta 符号推导后，直接由
-   `csrc/fused_add_rmsnorm_cuda.cu` 中的 `TORCH_LIBRARY_IMPL(ai_infra, CUDA, m)` 绑定至原生 C++ 函数！
-   当 TorchInductor 执行编译后的计算图时，直接走 `c10::Dispatcher` 纯 C++ 调用链（零 Python GIL 抢占、零 PyBind11 解包开销），
-   并在 C++ 侧通过 `std::atomic<int64_t>` 无锁递增运行期计数。
-2. `fused_gqa_rope`、`rope_single`、`fused_swiglu`：绑定至 Triton 核函数并同步维护运行期计数器。
+- `fused_rmsnorm_residual` / `fused_rmsnorm`：Python 侧注册 Schema 与 Meta 推导，
+  由 `csrc/fused_add_rmsnorm_cuda.cu` 通过 `TORCH_LIBRARY_IMPL` 直连 `c10::Dispatcher`（绕过 GIL）；
+- `fused_gqa_rope` / `rope_single` / `fused_swiglu`：绑定至 Triton 核函数并统计调用次数。
 """
 
-from typing import Dict, Tuple
 import torch
 import torch.nn.functional as F
 
 from .cuda_ext import get_cuda_rmsnorm_ext
 from .kernels import (
-    triton_rope_single,
     triton_fused_gqa_rope_qk,
     triton_fused_swiglu,
+    triton_rope_single,
 )
 
-_PY_RUNTIME_COUNTERS: Dict[str, int] = {
+_PY_RUNTIME_COUNTERS: dict[str, int] = {
     "fused_gqa_rope": 0,
     "rope_single": 0,
     "fused_swiglu": 0,
@@ -34,7 +29,7 @@ def reset_runtime_counters() -> None:
         get_cuda_rmsnorm_ext().reset_rmsnorm_calls()
 
 
-def get_runtime_counters() -> Dict[str, int]:
+def get_runtime_counters() -> dict[str, int]:
     add_calls = 0
     solo_calls = 0
     if torch.cuda.is_available():
@@ -55,7 +50,9 @@ def _ref_rotate_half(x: torch.Tensor) -> torch.Tensor:
     return torch.cat((-x[..., half:], x[..., :half]), dim=-1)
 
 
-if not hasattr(torch.ops, "ai_infra") or not hasattr(torch.ops.ai_infra, "fused_rmsnorm"):
+if not hasattr(torch.ops, "ai_infra") or not hasattr(
+    torch.ops.ai_infra, "fused_rmsnorm"
+):
     _AI_INFRA_LIB = torch.library.Library("ai_infra", "DEF")
 
     _AI_INFRA_LIB.define(
@@ -64,15 +61,11 @@ if not hasattr(torch.ops, "ai_infra") or not hasattr(torch.ops.ai_infra, "fused_
     _AI_INFRA_LIB.define(
         "fused_rmsnorm(Tensor x, Tensor weight, float eps=1e-6) -> Tensor"
     )
-    _AI_INFRA_LIB.define(
-        "rope_single(Tensor x, Tensor cos, Tensor sin) -> Tensor"
-    )
+    _AI_INFRA_LIB.define("rope_single(Tensor x, Tensor cos, Tensor sin) -> Tensor")
     _AI_INFRA_LIB.define(
         "fused_gqa_rope(Tensor q, Tensor k, Tensor cos, Tensor sin) -> (Tensor, Tensor)"
     )
-    _AI_INFRA_LIB.define(
-        "fused_swiglu(Tensor gate_up) -> Tensor"
-    )
+    _AI_INFRA_LIB.define("fused_swiglu(Tensor gate_up) -> Tensor")
 
     # Triton 算子的 CUDA 实现（RMSNorm 双算子的 CUDA 实现直接由 `.cu` 内的 C++ `TORCH_LIBRARY_IMPL` 注册！）
     @torch.library.impl(_AI_INFRA_LIB, "rope_single", "CUDA")
@@ -85,7 +78,7 @@ if not hasattr(torch.ops, "ai_infra") or not hasattr(torch.ops.ai_infra, "fused_
     @torch.library.impl(_AI_INFRA_LIB, "fused_gqa_rope", "CUDA")
     def _rope_gqa_cuda(
         q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         _PY_RUNTIME_COUNTERS["fused_gqa_rope"] += 1
         return triton_fused_gqa_rope_qk(q, k, cos, sin)
 
@@ -98,7 +91,7 @@ if not hasattr(torch.ops, "ai_infra") or not hasattr(torch.ops.ai_infra, "fused_
     @torch.library.impl(_AI_INFRA_LIB, "fused_rmsnorm_residual", "CPU")
     def _rmsnorm_add_cpu(
         x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         up_res = x + residual
         acc = up_res.to(torch.float32)
         var = acc.pow(2).mean(-1, keepdim=True)
@@ -122,7 +115,7 @@ if not hasattr(torch.ops, "ai_infra") or not hasattr(torch.ops.ai_infra, "fused_
     @torch.library.impl(_AI_INFRA_LIB, "fused_gqa_rope", "CPU")
     def _rope_gqa_cpu(
         q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         q_out = (q * cos) + (_ref_rotate_half(q) * sin)
         k_out = (k * cos) + (_ref_rotate_half(k) * sin)
         return q_out, k_out
@@ -136,7 +129,7 @@ if not hasattr(torch.ops, "ai_infra") or not hasattr(torch.ops.ai_infra, "fused_
     @torch.library.impl(_AI_INFRA_LIB, "fused_rmsnorm_residual", "Meta")
     def _rmsnorm_add_meta(
         x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         torch._check(x.shape == residual.shape)
         torch._check(x.shape[-1] == weight.shape[0])
         return torch.empty_like(x), torch.empty_like(residual)
@@ -157,14 +150,18 @@ if not hasattr(torch.ops, "ai_infra") or not hasattr(torch.ops.ai_infra, "fused_
     @torch.library.impl(_AI_INFRA_LIB, "fused_gqa_rope", "Meta")
     def _rope_gqa_meta(
         q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         torch._check(q.shape[-1] == k.shape[-1])
         return torch.empty_like(q), torch.empty_like(k)
 
     @torch.library.impl(_AI_INFRA_LIB, "fused_swiglu", "Meta")
     def _swiglu_meta(gate_up: torch.Tensor) -> torch.Tensor:
         torch._check(gate_up.shape[-1] % 2 == 0)
-        return torch.empty((*gate_up.shape[:-1], gate_up.shape[-1] // 2), dtype=gate_up.dtype, device=gate_up.device)
+        return torch.empty(
+            (*gate_up.shape[:-1], gate_up.shape[-1] // 2),
+            dtype=gate_up.dtype,
+            device=gate_up.device,
+        )
 
     if torch.cuda.is_available():
         get_cuda_rmsnorm_ext()
@@ -172,7 +169,7 @@ if not hasattr(torch.ops, "ai_infra") or not hasattr(torch.ops.ai_infra, "fused_
 
 def fused_rmsnorm_residual_op(
     x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.ops.ai_infra.fused_rmsnorm_residual(x, residual, weight, eps)
 
 
@@ -190,7 +187,7 @@ def rope_single_op(
 
 def fused_gqa_rope_op(
     q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.ops.ai_infra.fused_gqa_rope(q, k, cos, sin)
 
 

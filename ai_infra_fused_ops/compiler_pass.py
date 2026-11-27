@@ -1,36 +1,30 @@
-"""
-基于 `torch._inductor.pattern_matcher` 的两阶段推理图（Inference-Only `post_grad`）ATen 图算融合 Pass
+"""基于 `torch._inductor.pattern_matcher` 的两阶段推理图（`post_grad`）ATen 图算融合 Pass。
 
-核心设计与边界界定：
-1. 适用范围声明：本 Pass 基于 `pm.fwd_only` 构建，专为推理阶段（`torch.inference_mode()` / `torch.no_grad()`）设计；
-   训练阶段（需保留前向中间张量供反向图消费）的大词表显存与吞吐瓶颈由 `triton_fused_linear_cross_entropy` 自定义 `autograd.Function` 承担。
-2. 覆盖三大主流 RMSNorm 写法方言（均覆盖 `Add + RMSNorm` 双输出/单输出及首层独立 `RMSNorm`，支持 FP16/BF16 与 `eps=1e-6/1e-5`）：
-   - 方言 A：显式 FP32 权重提升 `(acc * rsqrt(var + eps) * w.float()).to(dtype)`；
-   - 方言 B：HuggingFace 官方 `LlamaRMSNorm` / `Qwen2RMSNorm` 标准写法 `w * (acc * rsqrt(var + eps)).to(dtype)`（及乘法交换律形式）；
-   - 方言 C：PyTorch 2.4+ 原生算子 `F.rms_norm(x, (N,), w, eps)`（覆盖 2D 与 3D 输入）。
-3. 两阶段 GQA RoPE 重写与动态传递闭包防死环保证：
-   - Stage 1 将单分支 7 节点 RoPE 规约为 `ai_infra::rope_single`；
-   - Stage 2 在每次成功横向合并一对兄弟 `(nq, nk) -> fused_gqa_rope` 后，**立即执行 `pm.stable_topological_sort(graph)` 并动态重算全图祖先位掩码 `anc_mask`**，
-     严密防止多组 `(cos_a, sin_a)` / `(cos_b, sin_b)` 交叉依赖场景下因静态掩码过期导致的 `P1 <-> P2` 有向死环。
-4. 提供异常安全的上下文管理器 `with inductor_fusion_pass():`，确保退出作用域或发生异常时自动还原全局 `inductor_config.post_grad_custom_post_pass`。
+核心设计：
+- 作用域：`pm.fwd_only` 专用于推理图；训练侧大词表瓶颈由 `triton_fused_linear_cross_entropy` 承担；
+- 多方言 RMSNorm 匹配：覆盖 FP32 权重提升、HF `Llama/Qwen2RMSNorm` 及原生 `F.rms_norm`；
+- 两阶段 GQA RoPE 合并：Stage 1 规约为 `rope_single`，Stage 2 合并后即时拓扑排序并重算 `anc_mask` 防环；
+- 异常安全上下文管理：`with inductor_fusion_pass():` 退出时自动恢复 `post_grad_custom_post_pass`。
 """
 
 import contextlib
 import operator
-from typing import Any, Dict, Iterator, Optional, Tuple
+from collections.abc import Iterator
+from typing import Any
+
 import torch
+import torch._inductor.config as inductor_config
 import torch.nn as nn
 import torch.nn.functional as F
-import torch._inductor.config as inductor_config
 from torch._inductor import pattern_matcher as pm
 from torch._inductor.custom_graph_pass import CustomGraphPass
 
-from .cuda_ext import ensure_linux_cuda_toolchain
 from . import custom_ops as _custom_ops  # noqa: F401
+from .cuda_ext import ensure_linux_cuda_toolchain
 
 ensure_linux_cuda_toolchain()
 
-COMPILE_MATCH_COUNTERS: Dict[str, int] = {
+COMPILE_MATCH_COUNTERS: dict[str, int] = {
     "fused_rmsnorm_residual": 0,
     "fused_rmsnorm": 0,
     "fused_gqa_rope": 0,
@@ -51,13 +45,14 @@ def reset_compile_counters() -> None:
         COMPILE_MATCH_COUNTERS[k] = 0
 
 
-def get_compile_counters() -> Dict[str, int]:
+def get_compile_counters() -> dict[str, int]:
     return dict(COMPILE_MATCH_COUNTERS)
 
 
 # ==============================================================================
 # 1. 多方言参考算子定义（覆盖 FP32-Weight、HuggingFace 官方 Qwen2/Llama 与原生 F.rms_norm）
 # ==============================================================================
+
 
 def eager_rmsnorm_fp32(
     x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6
@@ -69,7 +64,7 @@ def eager_rmsnorm_fp32(
 
 def eager_add_rmsnorm_fp32(
     x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     up_res = x + residual
     return eager_rmsnorm_fp32(up_res, weight, eps), up_res
 
@@ -110,7 +105,7 @@ def eager_rope_single(
 
 def eager_gqa_rope_qk(
     q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     q_embed = eager_rope_single(q, cos, sin)
     k_embed = eager_rope_single(k, cos, sin)
     return q_embed, k_embed
@@ -125,9 +120,10 @@ def eager_swiglu(gate_up: torch.Tensor) -> torch.Tensor:
 # 2. 注册 Stage-1 ATen Post-Grad 纵向模式与 Stage-2 动态闭包横向融合 Pass
 # ==============================================================================
 
+
 def _register_norm_dialect(
     norm_fn,
-    sample_shape: Tuple[int, ...],
+    sample_shape: tuple[int, ...],
     dev: torch.device,
     eps_val: float,
 ) -> None:
@@ -200,7 +196,11 @@ def _init_inductor_passes_once() -> None:
 
     for eps_val in (1e-6, 1e-5):
         # 方言 A: FP32 权重归一化；方言 B1/B2: HuggingFace 官方 Qwen2/Llama RMSNorm
-        for fn in (eager_rmsnorm_fp32, hf_official_rmsnorm, _hf_official_rmsnorm_commuted):
+        for fn in (
+            eager_rmsnorm_fp32,
+            hf_official_rmsnorm,
+            _hf_official_rmsnorm_commuted,
+        ):
             _register_norm_dialect(fn, (2, 16, 128), dev, eps_val)
         # 方言 C: PyTorch 原生 F.rms_norm（因 ATen 分解为正数维度轴 [1] / [2]，同时注册 2D 与 3D 模板）
         for shape in ((16, 128), (2, 16, 128)):
@@ -245,7 +245,7 @@ def _init_inductor_passes_once() -> None:
 def _compute_anc_mask(graph: torch.fx.Graph):
     nodes = list(graph.nodes)
     node_idx = {n: i for i, n in enumerate(nodes)}
-    anc_mask: Dict[torch.fx.Node, int] = {}
+    anc_mask: dict[torch.fx.Node, int] = {}
     for i, n in enumerate(nodes):
         m = 1 << i
         for inp in n.all_input_nodes:
@@ -254,7 +254,7 @@ def _compute_anc_mask(graph: torch.fx.Graph):
     return nodes, node_idx, anc_mask
 
 
-def _fuse_sibling_qk_rope(graph: torch.fx.Graph) -> Tuple[int, int]:
+def _fuse_sibling_qk_rope(graph: torch.fx.Graph) -> tuple[int, int]:
     """
     Stage 2: 动态传递闭包更新的横向兄弟 RoPE 合并。
     每次成功合并一对节点 `(nq, nk)` 后，立即对修改后的计算图执行 `pm.stable_topological_sort(graph)`
@@ -262,7 +262,9 @@ def _fuse_sibling_qk_rope(graph: torch.fx.Graph) -> Tuple[int, int]:
     实时反映到后续可达性判定中，彻底阻断多 `(cos, sin)` 交叉依赖死环。
     """
     rope_target = torch.ops.ai_infra.rope_single.default
-    init_ropes = [n for n in graph.nodes if n.op == "call_function" and n.target == rope_target]
+    init_ropes = [
+        n for n in graph.nodes if n.op == "call_function" and n.target == rope_target
+    ]
     if len(init_ropes) < 2:
         return 0, len(init_ropes)
 
@@ -270,7 +272,9 @@ def _fuse_sibling_qk_rope(graph: torch.fx.Graph) -> Tuple[int, int]:
 
     while True:
         nodes, node_idx, anc_mask = _compute_anc_mask(graph)
-        rope_nodes = [n for n in nodes if n.op == "call_function" and n.target == rope_target]
+        rope_nodes = [
+            n for n in nodes if n.op == "call_function" and n.target == rope_target
+        ]
         if len(rope_nodes) < 2:
             break
 
@@ -288,13 +292,20 @@ def _fuse_sibling_qk_rope(graph: torch.fx.Graph) -> Tuple[int, int]:
                     continue
 
                 # 在最新计算图传递闭包上校验严格反链（互不可达）
-                if ((anc_mask[n2] >> node_idx[n1]) & 1) != 0 or ((anc_mask[n1] >> node_idx[n2]) & 1) != 0:
+                if ((anc_mask[n2] >> node_idx[n1]) & 1) != 0 or (
+                    (anc_mask[n1] >> node_idx[n2]) & 1
+                ) != 0:
                     continue
 
                 v2 = n2.meta.get("val")
                 if not isinstance(v2, torch.Tensor) or v2.ndim != 4:
                     continue
-                if (v1.shape[0], v1.shape[1], v1.shape[3], v1.dtype) != (v2.shape[0], v2.shape[1], v2.shape[3], v2.dtype):
+                if (v1.shape[0], v1.shape[1], v1.shape[3], v1.dtype) != (
+                    v2.shape[0],
+                    v2.shape[1],
+                    v2.shape[3],
+                    v2.dtype,
+                ):
                     continue
 
                 if v1.shape[2] >= v2.shape[2]:
@@ -332,7 +343,9 @@ def _fuse_sibling_qk_rope(graph: torch.fx.Graph) -> Tuple[int, int]:
         if not merged_this_iter:
             break
 
-    rem_single = sum(1 for n in graph.nodes if n.op == "call_function" and n.target == rope_target)
+    rem_single = sum(
+        1 for n in graph.nodes if n.op == "call_function" and n.target == rope_target
+    )
     return gqa_fused, rem_single
 
 
@@ -381,15 +394,16 @@ class AIInfraPostGradPass(CustomGraphPass):
       既彻底隔离默认 `torch.compile` 与自定义 Pass 的编译缓存（杜绝缓存串扰），
       又保证每次 `torch.compile` 均真实触发 `COMPILE_MATCH_COUNTERS` 统计。
     """
+
     def __call__(self, graph: torch.fx.Graph) -> None:
         _ai_infra_post_grad_pass(graph)
 
-    def uuid(self) -> Optional[Any]:
+    def uuid(self) -> Any | None:
         return None
 
 
 _PASS_INSTANCE = AIInfraPostGradPass()
-_PREV_FX_CACHE_STATE: Optional[bool] = None
+_PREV_FX_CACHE_STATE: bool | None = None
 
 
 def enable_inductor_fusion_pass() -> None:
@@ -434,6 +448,7 @@ def inductor_fusion_pass() -> Iterator[None]:
 # 3. 测试与评测模型（含标准 LLaMA-3 Stack 与 HuggingFace 官方写法 Qwen2.5 真实权重层）
 # ==============================================================================
 
+
 class Llama3TransformerBlock(nn.Module):
     def __init__(
         self,
@@ -466,15 +481,17 @@ class Llama3TransformerBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        residual: Optional[torch.Tensor],
+        residual: torch.Tensor | None,
         cos: torch.Tensor,
         sin: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         if residual is None:
             up_res_1 = x
             norm_1 = eager_rmsnorm_fp32(x, self.attn_norm_weight, self.eps)
         else:
-            norm_1, up_res_1 = eager_add_rmsnorm_fp32(x, residual, self.attn_norm_weight, self.eps)
+            norm_1, up_res_1 = eager_add_rmsnorm_fp32(
+                x, residual, self.attn_norm_weight, self.eps
+            )
 
         bsz, seq_len, _ = norm_1.shape
         q = self.q_proj(norm_1).view(bsz, seq_len, self.num_q_heads, self.head_dim)
@@ -490,9 +507,13 @@ class Llama3TransformerBlock(nn.Module):
             is_causal=(seq_len > 1),
             enable_gqa=True,
         )
-        attn_proj = self.o_proj(attn_out.transpose(1, 2).contiguous().view(bsz, seq_len, self.hidden_dim))
+        attn_proj = self.o_proj(
+            attn_out.transpose(1, 2).contiguous().view(bsz, seq_len, self.hidden_dim)
+        )
 
-        norm_2, up_res_2 = eager_add_rmsnorm_fp32(attn_proj, up_res_1, self.ffn_norm_weight, self.eps)
+        norm_2, up_res_2 = eager_add_rmsnorm_fp32(
+            attn_proj, up_res_1, self.ffn_norm_weight, self.eps
+        )
 
         gate_up = self.gate_up_proj(norm_2)
         mlp_act = eager_swiglu(gate_up)
@@ -529,25 +550,38 @@ class Llama3DecoderStack(nn.Module):
         )
         self.final_norm_weight = nn.Parameter(torch.ones(hidden_dim))
 
-        inv_freq = 1.0 / (10000.0 ** (torch.arange(0, self.head_dim, 2, dtype=torch.float32) / self.head_dim))
+        inv_freq = 1.0 / (
+            10000.0
+            ** (torch.arange(0, self.head_dim, 2, dtype=torch.float32) / self.head_dim)
+        )
         t = torch.arange(max_seq_len, dtype=torch.float32)
         freqs = torch.outer(t, inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().view(1, max_seq_len, 1, self.head_dim), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().view(1, max_seq_len, 1, self.head_dim), persistent=False)
+        self.register_buffer(
+            "cos_cached",
+            emb.cos().view(1, max_seq_len, 1, self.head_dim),
+            persistent=False,
+        )
+        self.register_buffer(
+            "sin_cached",
+            emb.sin().view(1, max_seq_len, 1, self.head_dim),
+            persistent=False,
+        )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         seq_len = hidden_states.shape[1]
         cos = self.cos_cached[:, :seq_len, :, :].to(hidden_states.dtype)
         sin = self.sin_cached[:, :seq_len, :, :].to(hidden_states.dtype)
 
-        residual: Optional[torch.Tensor] = None
+        residual: torch.Tensor | None = None
         x = hidden_states
         for layer in self.layers:
             x, residual = layer(x, residual, cos, sin)
 
         assert residual is not None
-        final_out, _ = eager_add_rmsnorm_fp32(x, residual, self.final_norm_weight, self.eps)
+        final_out, _ = eager_add_rmsnorm_fp32(
+            x, residual, self.final_norm_weight, self.eps
+        )
         return final_out
 
 
@@ -558,6 +592,7 @@ class OfficialHFQwen2StyleModel(nn.Module):
     - 使用标准 HuggingFace `residual = hidden_states; hidden_states = residual + attn_out` 隐式残差流（而非手动传递元组）；
     - 支持直接加载本机 HuggingFace 缓存中的 `Qwen2.5-0.5B-Instruct` 真实 `model.safetensors` 权重（`14Q / 2KV, D=64, H=896`）。
     """
+
     def __init__(
         self,
         num_layers: int = 2,
@@ -582,13 +617,19 @@ class OfficialHFQwen2StyleModel(nn.Module):
         for _ in range(num_layers):
             layer = nn.ModuleDict(
                 {
-                    "input_layernorm": nn.ParameterList([nn.Parameter(torch.ones(hidden_size))]),
+                    "input_layernorm": nn.ParameterList(
+                        [nn.Parameter(torch.ones(hidden_size))]
+                    ),
                     "q_proj": nn.Linear(hidden_size, hidden_size, bias=qkv_bias),
                     "k_proj": nn.Linear(hidden_size, kv_dim, bias=qkv_bias),
                     "v_proj": nn.Linear(hidden_size, kv_dim, bias=qkv_bias),
                     "o_proj": nn.Linear(hidden_size, hidden_size, bias=False),
-                    "post_attention_layernorm": nn.ParameterList([nn.Parameter(torch.ones(hidden_size))]),
-                    "gate_up_proj": nn.Linear(hidden_size, 2 * intermediate_size, bias=False),
+                    "post_attention_layernorm": nn.ParameterList(
+                        [nn.Parameter(torch.ones(hidden_size))]
+                    ),
+                    "gate_up_proj": nn.Linear(
+                        hidden_size, 2 * intermediate_size, bias=False
+                    ),
                     "down_proj": nn.Linear(intermediate_size, hidden_size, bias=False),
                 }
             )
@@ -596,12 +637,19 @@ class OfficialHFQwen2StyleModel(nn.Module):
 
         self.norm_weight = nn.Parameter(torch.ones(hidden_size))
 
-        inv_freq = 1.0 / (rope_theta ** (torch.arange(0, self.head_dim, 2, dtype=torch.float32) / self.head_dim))
+        inv_freq = 1.0 / (
+            rope_theta
+            ** (torch.arange(0, self.head_dim, 2, dtype=torch.float32) / self.head_dim)
+        )
         t = torch.arange(2048, dtype=torch.float32)
         freqs = torch.outer(t, inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().view(1, 2048, 1, self.head_dim), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().view(1, 2048, 1, self.head_dim), persistent=False)
+        self.register_buffer(
+            "cos_cached", emb.cos().view(1, 2048, 1, self.head_dim), persistent=False
+        )
+        self.register_buffer(
+            "sin_cached", emb.sin().view(1, 2048, 1, self.head_dim), persistent=False
+        )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         bsz, seq_len, _ = hidden_states.shape
@@ -610,11 +658,19 @@ class OfficialHFQwen2StyleModel(nn.Module):
 
         for layer in self.layers:
             residual = hidden_states
-            hidden_states = hf_official_rmsnorm(hidden_states, layer["input_layernorm"][0], self.eps)  # type: ignore[index]
+            hidden_states = hf_official_rmsnorm(
+                hidden_states, layer["input_layernorm"][0], self.eps
+            )  # type: ignore[index]
 
-            q = layer["q_proj"](hidden_states).view(bsz, seq_len, self.num_q_heads, self.head_dim)  # type: ignore[index]
-            k = layer["k_proj"](hidden_states).view(bsz, seq_len, self.num_kv_heads, self.head_dim)  # type: ignore[index]
-            v = layer["v_proj"](hidden_states).view(bsz, seq_len, self.num_kv_heads, self.head_dim)  # type: ignore[index]
+            q = layer["q_proj"](hidden_states).view(
+                bsz, seq_len, self.num_q_heads, self.head_dim
+            )  # type: ignore[index]
+            k = layer["k_proj"](hidden_states).view(
+                bsz, seq_len, self.num_kv_heads, self.head_dim
+            )  # type: ignore[index]
+            v = layer["v_proj"](hidden_states).view(
+                bsz, seq_len, self.num_kv_heads, self.head_dim
+            )  # type: ignore[index]
 
             q, k = eager_gqa_rope_qk(q, k, cos, sin)
             attn_out = F.scaled_dot_product_attention(
@@ -624,12 +680,20 @@ class OfficialHFQwen2StyleModel(nn.Module):
                 is_causal=(seq_len > 1),
                 enable_gqa=True,
             )
-            attn_out = layer["o_proj"](attn_out.transpose(1, 2).contiguous().view(bsz, seq_len, self.hidden_size))  # type: ignore[index]
+            attn_out = layer["o_proj"](
+                attn_out.transpose(1, 2)
+                .contiguous()
+                .view(bsz, seq_len, self.hidden_size)
+            )  # type: ignore[index]
             hidden_states = residual + attn_out
 
             residual = hidden_states
-            hidden_states = hf_official_rmsnorm(hidden_states, layer["post_attention_layernorm"][0], self.eps)  # type: ignore[index]
-            mlp_out = layer["down_proj"](eager_swiglu(layer["gate_up_proj"](hidden_states)))  # type: ignore[index]
+            hidden_states = hf_official_rmsnorm(
+                hidden_states, layer["post_attention_layernorm"][0], self.eps
+            )  # type: ignore[index]
+            mlp_out = layer["down_proj"](
+                eager_swiglu(layer["gate_up_proj"](hidden_states))
+            )  # type: ignore[index]
             hidden_states = residual + mlp_out
 
         return hf_official_rmsnorm(hidden_states, self.norm_weight, self.eps)

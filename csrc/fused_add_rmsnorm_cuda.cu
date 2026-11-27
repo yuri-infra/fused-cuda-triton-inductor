@@ -47,21 +47,19 @@ __device__ __forceinline__ scalar_t from_float(float v) {
 }
 
 __device__ __forceinline__ float warp_reduce_sum(float val) {
-    #pragma unroll
+#pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
         val += __shfl_xor_sync(0xffffffffu, val, offset);
     }
     return val;
 }
 
-__device__ __forceinline__ float block_reduce_inv_rms(
-    float thread_sum_sq,
-    const int warp_id,
-    const int lane_id,
-    const int num_warps,
-    const int N,
-    const float eps
-) {
+__device__ __forceinline__ float block_reduce_inv_rms(float thread_sum_sq,
+                                                      const int warp_id,
+                                                      const int lane_id,
+                                                      const int num_warps,
+                                                      const int N,
+                                                      const float eps) {
     float warp_sum = warp_reduce_sum(thread_sum_sq);
     __shared__ float s_warp_sums[32];
     __shared__ float s_inv_rms;
@@ -83,15 +81,13 @@ __device__ __forceinline__ float block_reduce_inv_rms(
 }
 
 template <typename scalar_t>
-__global__ void fused_add_rmsnorm_vec128_kernel(
-    const scalar_t* __restrict__ x,
-    const scalar_t* __restrict__ residual,
-    const scalar_t* __restrict__ weight,
-    scalar_t* __restrict__ norm_out,
-    scalar_t* __restrict__ updated_res,
-    const int N,
-    const float eps
-) {
+__global__ void fused_add_rmsnorm_vec128_kernel(const scalar_t* __restrict__ x,
+                                                const scalar_t* __restrict__ residual,
+                                                const scalar_t* __restrict__ weight,
+                                                scalar_t* __restrict__ norm_out,
+                                                scalar_t* __restrict__ updated_res,
+                                                const int N,
+                                                const float eps) {
     const int row = blockIdx.x;
     const int tid = threadIdx.x;
     const int block_threads = blockDim.x;
@@ -127,7 +123,7 @@ __global__ void fused_add_rmsnorm_vec128_kernel(
 
         float reg_u[MAX_VECS][VEC_ELEMS];
 
-        #pragma unroll
+#pragma unroll
         for (int v = 0; v < MAX_VECS; ++v) {
             const int idx = tid + v * block_threads;
             if (idx < n_vec) {
@@ -139,7 +135,7 @@ __global__ void fused_add_rmsnorm_vec128_kernel(
                 const scalar_t* sr = reinterpret_cast<const scalar_t*>(&ur);
                 scalar_t* su = reinterpret_cast<scalar_t*>(&u_out);
 
-                #pragma unroll
+#pragma unroll
                 for (int k = 0; k < VEC_ELEMS; ++k) {
                     float acc = to_float(sx[k]) + to_float(sr[k]);
                     scalar_t rounded = from_float<scalar_t>(acc);
@@ -152,9 +148,10 @@ __global__ void fused_add_rmsnorm_vec128_kernel(
             }
         }
 
-        const float inv_rms = block_reduce_inv_rms(thread_sum_sq, warp_id, lane_id, num_warps, N, eps);
+        const float inv_rms =
+            block_reduce_inv_rms(thread_sum_sq, warp_id, lane_id, num_warps, N, eps);
 
-        #pragma unroll
+#pragma unroll
         for (int v = 0; v < MAX_VECS; ++v) {
             const int idx = tid + v * block_threads;
             if (idx < n_vec) {
@@ -164,7 +161,7 @@ __global__ void fused_add_rmsnorm_vec128_kernel(
                 const scalar_t* sw = reinterpret_cast<const scalar_t*>(&uw);
                 scalar_t* so = reinterpret_cast<scalar_t*>(&uo);
 
-                #pragma unroll
+#pragma unroll
                 for (int k = 0; k < VEC_ELEMS; ++k) {
                     float normed = (reg_u[v][k] * inv_rms) * to_float(sw[k]);
                     so[k] = from_float<scalar_t>(normed);
@@ -191,7 +188,7 @@ __global__ void fused_add_rmsnorm_vec128_kernel(
             const scalar_t* sr = reinterpret_cast<const scalar_t*>(&ur);
             scalar_t* su = reinterpret_cast<scalar_t*>(&u_out);
 
-            #pragma unroll
+#pragma unroll
             for (int k = 0; k < VEC_ELEMS; ++k) {
                 float acc = to_float(sx[k]) + to_float(sr[k]);
                 scalar_t rounded = from_float<scalar_t>(acc);
@@ -236,7 +233,7 @@ __global__ void fused_add_rmsnorm_vec128_kernel(
             const scalar_t* sw = reinterpret_cast<const scalar_t*>(&uw);
             scalar_t* so = reinterpret_cast<scalar_t*>(&uo);
 
-            #pragma unroll
+#pragma unroll
             for (int k = 0; k < VEC_ELEMS; ++k) {
                 float normed = (to_float(su[k]) * inv_rms) * to_float(sw[k]);
                 so[k] = from_float<scalar_t>(normed);
@@ -257,13 +254,11 @@ __global__ void fused_add_rmsnorm_vec128_kernel(
 }
 
 template <typename scalar_t>
-__global__ void rmsnorm_vec128_kernel(
-    const scalar_t* __restrict__ x,
-    const scalar_t* __restrict__ weight,
-    scalar_t* __restrict__ norm_out,
-    const int N,
-    const float eps
-) {
+__global__ void rmsnorm_vec128_kernel(const scalar_t* __restrict__ x,
+                                      const scalar_t* __restrict__ weight,
+                                      scalar_t* __restrict__ norm_out,
+                                      const int N,
+                                      const float eps) {
     const int row = blockIdx.x;
     const int tid = threadIdx.x;
     const int block_threads = blockDim.x;
@@ -293,13 +288,13 @@ __global__ void rmsnorm_vec128_kernel(
 
         float reg_x[MAX_VECS][VEC_ELEMS];
 
-        #pragma unroll
+#pragma unroll
         for (int v = 0; v < MAX_VECS; ++v) {
             const int idx = tid + v * block_threads;
             if (idx < n_vec) {
                 uint4 ux = __ldg(&vec_x[idx]);
                 const scalar_t* sx = reinterpret_cast<const scalar_t*>(&ux);
-                #pragma unroll
+#pragma unroll
                 for (int k = 0; k < VEC_ELEMS; ++k) {
                     float val = to_float(sx[k]);
                     reg_x[v][k] = val;
@@ -308,9 +303,10 @@ __global__ void rmsnorm_vec128_kernel(
             }
         }
 
-        const float inv_rms = block_reduce_inv_rms(thread_sum_sq, warp_id, lane_id, num_warps, N, eps);
+        const float inv_rms =
+            block_reduce_inv_rms(thread_sum_sq, warp_id, lane_id, num_warps, N, eps);
 
-        #pragma unroll
+#pragma unroll
         for (int v = 0; v < MAX_VECS; ++v) {
             const int idx = tid + v * block_threads;
             if (idx < n_vec) {
@@ -318,7 +314,7 @@ __global__ void rmsnorm_vec128_kernel(
                 uint4 uo;
                 const scalar_t* sw = reinterpret_cast<const scalar_t*>(&uw);
                 scalar_t* so = reinterpret_cast<scalar_t*>(&uo);
-                #pragma unroll
+#pragma unroll
                 for (int k = 0; k < VEC_ELEMS; ++k) {
                     so[k] = from_float<scalar_t>((reg_x[v][k] * inv_rms) * to_float(sw[k]));
                 }
@@ -334,7 +330,7 @@ __global__ void rmsnorm_vec128_kernel(
         for (int idx = tid; idx < n_vec; idx += block_threads) {
             uint4 ux = __ldg(&vec_x[idx]);
             const scalar_t* sx = reinterpret_cast<const scalar_t*>(&ux);
-            #pragma unroll
+#pragma unroll
             for (int k = 0; k < VEC_ELEMS; ++k) {
                 float v = to_float(sx[k]);
                 thread_sum_sq += v * v;
@@ -368,7 +364,7 @@ __global__ void rmsnorm_vec128_kernel(
             const scalar_t* sw = reinterpret_cast<const scalar_t*>(&uw);
             scalar_t* so = reinterpret_cast<scalar_t*>(&uo);
 
-            #pragma unroll
+#pragma unroll
             for (int k = 0; k < VEC_ELEMS; ++k) {
                 float normed = (to_float(sx[k]) * inv_rms) * to_float(sw[k]);
                 so[k] = from_float<scalar_t>(normed);
@@ -389,29 +385,34 @@ __global__ void rmsnorm_vec128_kernel(
 
 inline int select_block_threads(const int N, const size_t elem_size) {
     if (elem_size == 4) {
-        // FP32: VEC_ELEMS=4, MAX_VECS=4 -> 256 threads covers N <= 4096, 512 threads covers N <= 8192
-        if (N <= 2048) return 128;
-        if (N <= 4096) return 256;
+        // FP32: VEC_ELEMS=4, MAX_VECS=4 -> 256 threads covers N <= 4096, 512 threads covers N <=
+        // 8192
+        if (N <= 2048)
+            return 128;
+        if (N <= 4096)
+            return 256;
         return 512;
     }
-    // FP16 / BF16: VEC_ELEMS=8, MAX_VECS=4 -> 128 threads covers N <= 4096, 256 threads covers N <= 8192
-    if (N <= 2048) return 128;
-    if (N <= 8192) return 256;
+    // FP16 / BF16: VEC_ELEMS=8, MAX_VECS=4 -> 128 threads covers N <= 4096, 256 threads covers N <=
+    // 8192
+    if (N <= 2048)
+        return 128;
+    if (N <= 8192)
+        return 256;
     return 512;
 }
 
 }  // namespace
 
-std::tuple<torch::Tensor, torch::Tensor> cuda_fused_add_rmsnorm_tuple(
-    const torch::Tensor& x,
-    const torch::Tensor& residual,
-    const torch::Tensor& weight,
-    double eps
-) {
+std::tuple<torch::Tensor, torch::Tensor> cuda_fused_add_rmsnorm_tuple(const torch::Tensor& x,
+                                                                      const torch::Tensor& residual,
+                                                                      const torch::Tensor& weight,
+                                                                      double eps) {
     TORCH_CHECK(x.is_cuda() && residual.is_cuda() && weight.is_cuda(), "Tensors must be on CUDA");
     TORCH_CHECK(x.sizes() == residual.sizes(), "x and residual shapes must match");
-    TORCH_CHECK(x.scalar_type() == residual.scalar_type() && x.scalar_type() == weight.scalar_type(),
-                "x, residual, and weight dtypes must match");
+    TORCH_CHECK(
+        x.scalar_type() == residual.scalar_type() && x.scalar_type() == weight.scalar_type(),
+        "x, residual, and weight dtypes must match");
 
     auto x_c = x.is_contiguous() ? x : x.contiguous();
     auto res_c = residual.is_contiguous() ? residual : residual.contiguous();
@@ -432,32 +433,19 @@ std::tuple<torch::Tensor, torch::Tensor> cuda_fused_add_rmsnorm_tuple(
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(x_c.device().index());
 
     AT_DISPATCH_FLOATING_TYPES_AND2(
-        at::ScalarType::Half,
-        at::ScalarType::BFloat16,
-        x_c.scalar_type(),
-        "cuda_fused_add_rmsnorm",
+        at::ScalarType::Half, at::ScalarType::BFloat16, x_c.scalar_type(), "cuda_fused_add_rmsnorm",
         [&] {
             fused_add_rmsnorm_vec128_kernel<scalar_t><<<M, threads, 0, stream>>>(
-                x_c.data_ptr<scalar_t>(),
-                res_c.data_ptr<scalar_t>(),
-                w_c.data_ptr<scalar_t>(),
-                norm_out.data_ptr<scalar_t>(),
-                updated_res.data_ptr<scalar_t>(),
-                N,
-                static_cast<float>(eps)
-            );
+                x_c.data_ptr<scalar_t>(), res_c.data_ptr<scalar_t>(), w_c.data_ptr<scalar_t>(),
+                norm_out.data_ptr<scalar_t>(), updated_res.data_ptr<scalar_t>(), N,
+                static_cast<float>(eps));
             C10_CUDA_KERNEL_LAUNCH_CHECK();
-        }
-    );
+        });
 
     return std::make_tuple(norm_out, updated_res);
 }
 
-torch::Tensor cuda_rmsnorm_impl(
-    const torch::Tensor& x,
-    const torch::Tensor& weight,
-    double eps
-) {
+torch::Tensor cuda_rmsnorm_impl(const torch::Tensor& x, const torch::Tensor& weight, double eps) {
     TORCH_CHECK(x.is_cuda() && weight.is_cuda(), "Tensors must be on CUDA");
     TORCH_CHECK(x.scalar_type() == weight.scalar_type(), "x and weight dtypes must match");
 
@@ -477,41 +465,27 @@ torch::Tensor cuda_rmsnorm_impl(
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(x_c.device().index());
 
     AT_DISPATCH_FLOATING_TYPES_AND2(
-        at::ScalarType::Half,
-        at::ScalarType::BFloat16,
-        x_c.scalar_type(),
-        "cuda_rmsnorm",
-        [&] {
+        at::ScalarType::Half, at::ScalarType::BFloat16, x_c.scalar_type(), "cuda_rmsnorm", [&] {
             rmsnorm_vec128_kernel<scalar_t><<<M, threads, 0, stream>>>(
-                x_c.data_ptr<scalar_t>(),
-                w_c.data_ptr<scalar_t>(),
-                norm_out.data_ptr<scalar_t>(),
-                N,
-                static_cast<float>(eps)
-            );
+                x_c.data_ptr<scalar_t>(), w_c.data_ptr<scalar_t>(), norm_out.data_ptr<scalar_t>(),
+                N, static_cast<float>(eps));
             C10_CUDA_KERNEL_LAUNCH_CHECK();
-        }
-    );
+        });
 
     return norm_out;
 }
 
-// Pure C++ `c10::Dispatcher` targets (zero Python callback / zero GIL overhead inside TorchInductor!)
-std::tuple<torch::Tensor, torch::Tensor> cuda_fused_add_rmsnorm_op(
-    const torch::Tensor& x,
-    const torch::Tensor& residual,
-    const torch::Tensor& weight,
-    double eps
-) {
+// Pure C++ `c10::Dispatcher` targets (zero Python callback / zero GIL overhead inside
+// TorchInductor!)
+std::tuple<torch::Tensor, torch::Tensor> cuda_fused_add_rmsnorm_op(const torch::Tensor& x,
+                                                                   const torch::Tensor& residual,
+                                                                   const torch::Tensor& weight,
+                                                                   double eps) {
     g_rmsnorm_add_calls.fetch_add(1, std::memory_order_relaxed);
     return cuda_fused_add_rmsnorm_tuple(x, residual, weight, eps);
 }
 
-torch::Tensor cuda_rmsnorm_op(
-    const torch::Tensor& x,
-    const torch::Tensor& weight,
-    double eps
-) {
+torch::Tensor cuda_rmsnorm_op(const torch::Tensor& x, const torch::Tensor& weight, double eps) {
     g_rmsnorm_solo_calls.fetch_add(1, std::memory_order_relaxed);
     return cuda_rmsnorm_impl(x, weight, eps);
 }
@@ -535,9 +509,12 @@ TORCH_LIBRARY_IMPL(ai_infra, CUDA, m) {
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("fused_add_rmsnorm", &cuda_fused_add_rmsnorm_tuple, "Native CUDA C++ Fused Residual Add + RMSNorm");
+    m.def("fused_add_rmsnorm", &cuda_fused_add_rmsnorm_tuple,
+          "Native CUDA C++ Fused Residual Add + RMSNorm");
     m.def("rmsnorm", &cuda_rmsnorm_impl, "Native CUDA C++ Standalone RMSNorm");
-    m.def("get_rmsnorm_add_calls", &get_rmsnorm_add_calls, "Get C++ atomic call count for fused_rmsnorm_residual");
-    m.def("get_rmsnorm_solo_calls", &get_rmsnorm_solo_calls, "Get C++ atomic call count for fused_rmsnorm");
+    m.def("get_rmsnorm_add_calls", &get_rmsnorm_add_calls,
+          "Get C++ atomic call count for fused_rmsnorm_residual");
+    m.def("get_rmsnorm_solo_calls", &get_rmsnorm_solo_calls,
+          "Get C++ atomic call count for fused_rmsnorm");
     m.def("reset_rmsnorm_calls", &reset_rmsnorm_calls, "Reset C++ atomic call counters");
 }

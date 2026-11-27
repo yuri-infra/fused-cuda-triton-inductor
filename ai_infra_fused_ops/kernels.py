@@ -1,25 +1,21 @@
-"""
-Triton 高性能算子实现集：
-1. `triton_fused_rmsnorm_residual` & `triton_rmsnorm`: 单 Pass 融合 Residual Add + RMSNorm 与独立 RMSNorm（与 `csrc/` 原生 CUDA C++ `.cu` 版形成对照）
-2. `triton_fused_swiglu`: 2D 分块单 Pass 融合 SwiGLU (`chunk + silu + mul`)
-3. `triton_fused_gqa_rope_qk` & `triton_rope_single`: 自适应双模式单次发射异构头数 GQA (`Hq != Hkv`) Q+K 旋转位置编码算子
-   - 完整支持 Batch 维与 Seq 维双向广播步长校验（防止 `S_cos=1` 时显存越界读取）；
-   - Decode (`B*S <= 32`) 采用 `(B*S, Hq + Hkv)` 网格铺满 SM；Prefill (`B*S > 32`) 采用 `(B*S,)` 2D 向量化网格复用寄存器内 `cos/sin`。
-4. `triton_fused_linear_cross_entropy`: 分块 GEMM + Triton Online-Softmax 原位前反向交叉熵损失算子
-   - 支持非连续切片标签（如自回归训练 `labels[:, 1:]`）与 `retain_graph=True` 多次反传；
-   - 针对 FP16 采用指数平移预缩放 (`2^-4`) + 尾端寄存器级 FP32 延迟归一化，杜绝大词表非目标词梯度下溢归零及极端同目标累加溢出；
-   - 全程零 `.item()` Host-Device 同步阻塞，完全兼容 `torch.compile(fullgraph=True)`。
+"""Triton 高性能算子实现集。
+
+包含：
+- `triton_fused_rmsnorm_residual` / `triton_rmsnorm`：单 Pass 融合残差加法与 RMSNorm；
+- `triton_fused_swiglu`：2D 分块单 Pass 融合 SwiGLU；
+- `triton_fused_gqa_rope_qk` / `triton_rope_single`：双模式单发射 GQA RoPE（含双向广播越界防护）；
+- `triton_fused_linear_cross_entropy`：分块 GEMM + Triton Online-Softmax 原位前反向交叉熵
+  （FP16 `2^-4` 预缩放防下溢、零 `.item()` 同步、兼容 `torch.compile(fullgraph=True)`）。
 """
 
-from typing import Tuple
 import torch
 import triton
 import triton.language as tl
 
-
 # ==============================================================================
 # 1. Fused Add + RMSNorm & Standalone RMSNorm (Triton 版)
 # ==============================================================================
+
 
 @triton.jit
 def _fused_rmsnorm_residual_kernel(
@@ -40,8 +36,12 @@ def _fused_rmsnorm_residual_kernel(
     cols = tl.arange(0, BLOCK_SIZE)
     mask = cols < N
 
-    x = tl.load(X_ptr + row_idx * stride_x_m + cols, mask=mask, other=0.0).to(tl.float32)
-    res = tl.load(Residual_ptr + row_idx * stride_res_m + cols, mask=mask, other=0.0).to(tl.float32)
+    x = tl.load(X_ptr + row_idx * stride_x_m + cols, mask=mask, other=0.0).to(
+        tl.float32
+    )
+    res = tl.load(
+        Residual_ptr + row_idx * stride_res_m + cols, mask=mask, other=0.0
+    ).to(tl.float32)
 
     row_up_ptr = Updated_Res_ptr + row_idx * stride_up_res_m + cols
     up_rounded = (x + res).to(row_up_ptr.dtype.element_ty)
@@ -72,7 +72,9 @@ def _rmsnorm_solo_kernel(
     cols = tl.arange(0, BLOCK_SIZE)
     mask = cols < N
 
-    x = tl.load(X_ptr + row_idx * stride_x_m + cols, mask=mask, other=0.0).to(tl.float32)
+    x = tl.load(X_ptr + row_idx * stride_x_m + cols, mask=mask, other=0.0).to(
+        tl.float32
+    )
     mean_sq = tl.sum(x * x, axis=0) / N
     rsqrt = tl.rsqrt(mean_sq + eps)
 
@@ -87,7 +89,7 @@ def triton_fused_rmsnorm_residual(
     residual: torch.Tensor,
     weight: torch.Tensor,
     eps: float = 1e-6,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     assert x.is_cuda and residual.is_cuda and weight.is_cuda
     assert x.shape == residual.shape and x.shape[-1] == weight.shape[0]
 
@@ -96,7 +98,11 @@ def triton_fused_rmsnorm_residual(
     M = x.numel() // N
 
     x_2d = x.view(M, N) if x.is_contiguous() else x.contiguous().view(M, N)
-    res_2d = residual.view(M, N) if residual.is_contiguous() else residual.contiguous().view(M, N)
+    res_2d = (
+        residual.view(M, N)
+        if residual.is_contiguous()
+        else residual.contiguous().view(M, N)
+    )
     w_1d = weight if weight.is_contiguous() else weight.contiguous()
 
     out_2d = torch.empty_like(x_2d)
@@ -161,6 +167,7 @@ def triton_rmsnorm(
 # 2. Fused SwiGLU (Triton 版)
 # ==============================================================================
 
+
 @triton.jit
 def _fused_swiglu_kernel(
     GateUp_ptr,
@@ -192,7 +199,11 @@ def triton_fused_swiglu(gate_up: torch.Tensor) -> torch.Tensor:
     N = two_n // 2
     M = gate_up.numel() // two_n
 
-    gu_2d = gate_up.view(M, two_n) if gate_up.is_contiguous() else gate_up.contiguous().view(M, two_n)
+    gu_2d = (
+        gate_up.view(M, two_n)
+        if gate_up.is_contiguous()
+        else gate_up.contiguous().view(M, two_n)
+    )
     out_2d = torch.empty((M, N), dtype=gate_up.dtype, device=gate_up.device)
     if M == 0:
         return out_2d.view(*orig_prefix, N)
@@ -216,6 +227,7 @@ def triton_fused_swiglu(gate_up: torch.Tensor) -> torch.Tensor:
 # 3. Single-Launch Multi-Head Heterogeneous GQA Q+K RoPE & Single-Branch RoPE
 # ==============================================================================
 
+
 def _prepare_rope_cos_sin(
     cos: torch.Tensor,
     sin: torch.Tensor,
@@ -223,17 +235,21 @@ def _prepare_rope_cos_sin(
     S: int,
     D: int,
     dtype: torch.dtype,
-) -> Tuple[torch.Tensor, torch.Tensor, int, int]:
+) -> tuple[torch.Tensor, torch.Tensor, int, int]:
     """
     严格校验并规范化 `cos` / `sin` 布局，正确计算 Batch 维与 Seq 维广播步长（修复 `S_cos=1` 时的显存越界读漏洞）。
     合法形状：`[B_or_1, S_or_1, 1, D]`、`[B_or_1, S_or_1, D]` 或 `[S_or_1, D]`。
     """
     assert cos.is_cuda and sin.is_cuda, "cos/sin must be on CUDA"
     assert cos.shape == sin.shape, f"cos/sin shape mismatch: {cos.shape} vs {sin.shape}"
-    assert cos.dtype == dtype and sin.dtype == dtype, f"cos/sin dtype must match {dtype}"
+    assert cos.dtype == dtype and sin.dtype == dtype, (
+        f"cos/sin dtype must match {dtype}"
+    )
 
     if cos.ndim == 4:
-        assert cos.shape[2] == 1, f"4D cos/sin head dim (axis 2) must be 1 for broadcast, got {cos.shape}"
+        assert cos.shape[2] == 1, (
+            f"4D cos/sin head dim (axis 2) must be 1 for broadcast, got {cos.shape}"
+        )
         cos_3d = cos.squeeze(2)
         sin_3d = sin.squeeze(2)
     elif cos.ndim == 3:
@@ -263,8 +279,11 @@ def _rope_single_kernel(
     Cos_ptr,
     Sin_ptr,
     Out_ptr,
-    stride_xb, stride_xs, stride_xh,
-    stride_cb, stride_cs,
+    stride_xb,
+    stride_xs,
+    stride_xh,
+    stride_cb,
+    stride_cs,
     S,
     HALF_D: tl.constexpr,
 ):
@@ -301,9 +320,14 @@ def _fused_gqa_rope_decode_kernel(
     Sin_ptr,
     Q_out_ptr,
     K_out_ptr,
-    stride_qb, stride_qs, stride_qh,
-    stride_kb, stride_ks, stride_kh,
-    stride_cb, stride_cs,
+    stride_qb,
+    stride_qs,
+    stride_qh,
+    stride_kb,
+    stride_ks,
+    stride_kh,
+    stride_cb,
+    stride_cs,
     S,
     Hq: tl.constexpr,
     Hkv: tl.constexpr,
@@ -326,7 +350,12 @@ def _fused_gqa_rope_decode_kernel(
 
     if head_combined < Hq:
         q_in = Q_ptr + b_idx * stride_qb + s_idx * stride_qs + head_combined * stride_qh
-        q_out = Q_out_ptr + b_idx * stride_qb + s_idx * stride_qs + head_combined * stride_qh
+        q_out = (
+            Q_out_ptr
+            + b_idx * stride_qb
+            + s_idx * stride_qs
+            + head_combined * stride_qh
+        )
         x1 = tl.load(q_in + half_offs).to(tl.float32)
         x2 = tl.load(q_in + HALF_D + half_offs).to(tl.float32)
         o1 = x1 * cos1 - x2 * sin1
@@ -353,9 +382,14 @@ def _fused_gqa_rope_prefill_kernel(
     Sin_ptr,
     Q_out_ptr,
     K_out_ptr,
-    stride_qb, stride_qs, stride_qh,
-    stride_kb, stride_ks, stride_kh,
-    stride_cb, stride_cs,
+    stride_qb,
+    stride_qs,
+    stride_qh,
+    stride_kb,
+    stride_ks,
+    stride_kh,
+    stride_cb,
+    stride_cs,
     S,
     Hq: tl.constexpr,
     Hkv: tl.constexpr,
@@ -386,7 +420,9 @@ def _fused_gqa_rope_prefill_kernel(
     qo1 = qx1 * cos1 - qx2 * sin1
     qo2 = qx2 * cos2 + qx1 * sin2
     tl.store(q_tok_out + d_offs, qo1.to(Q_out_ptr.dtype.element_ty), mask=hq_mask)
-    tl.store(q_tok_out + HALF_D + d_offs, qo2.to(Q_out_ptr.dtype.element_ty), mask=hq_mask)
+    tl.store(
+        q_tok_out + HALF_D + d_offs, qo2.to(Q_out_ptr.dtype.element_ty), mask=hq_mask
+    )
 
     hkv_offs = tl.arange(0, BLOCK_HKV)[:, None]
     hkv_mask = hkv_offs < Hkv
@@ -398,7 +434,9 @@ def _fused_gqa_rope_prefill_kernel(
     ko1 = kx1 * cos1 - kx2 * sin1
     ko2 = kx2 * cos2 + kx1 * sin2
     tl.store(k_tok_out + d_offs, ko1.to(K_out_ptr.dtype.element_ty), mask=hkv_mask)
-    tl.store(k_tok_out + HALF_D + d_offs, ko2.to(K_out_ptr.dtype.element_ty), mask=hkv_mask)
+    tl.store(
+        k_tok_out + HALF_D + d_offs, ko2.to(K_out_ptr.dtype.element_ty), mask=hkv_mask
+    )
 
 
 def triton_rope_single(
@@ -411,7 +449,9 @@ def triton_rope_single(
     assert D > 0 and (D & (D - 1)) == 0, "Head dim 必须为 2 的幂次"
 
     x_c = x if x.is_contiguous() else x.contiguous()
-    cos_c, sin_c, stride_cb, stride_cs = _prepare_rope_cos_sin(cos, sin, B, S, D, x.dtype)
+    cos_c, sin_c, stride_cb, stride_cs = _prepare_rope_cos_sin(
+        cos, sin, B, S, D, x.dtype
+    )
 
     out = torch.empty_like(x_c)
     if B * S * H == 0:
@@ -422,8 +462,11 @@ def triton_rope_single(
         cos_c,
         sin_c,
         out,
-        x_c.stride(0), x_c.stride(1), x_c.stride(2),
-        stride_cb, stride_cs,
+        x_c.stride(0),
+        x_c.stride(1),
+        x_c.stride(2),
+        stride_cb,
+        stride_cs,
         S,
         HALF_D=D // 2,
         num_warps=2 if D <= 128 else 4,
@@ -436,16 +479,18 @@ def triton_fused_gqa_rope_qk(
     k: torch.Tensor,
     cos: torch.Tensor,
     sin: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     assert q.ndim == 4 and k.ndim == 4 and q.is_cuda and k.is_cuda
     B, S, Hq, D = q.shape
     Bk, Sk, Hkv, Dk = k.shape
-    assert (B, S, D) == (Bk, Sk, Dk) and q.dtype == k.dtype
+    assert (Bk, Sk, Dk) == (B, S, D) and q.dtype == k.dtype
     assert D > 0 and (D & (D - 1)) == 0, "Head dim 必须为 2 的幂次 (如 64, 128)"
 
     q_c = q if q.is_contiguous() else q.contiguous()
     k_c = k if k.is_contiguous() else k.contiguous()
-    cos_c, sin_c, stride_cb, stride_cs = _prepare_rope_cos_sin(cos, sin, B, S, D, q.dtype)
+    cos_c, sin_c, stride_cb, stride_cs = _prepare_rope_cos_sin(
+        cos, sin, B, S, D, q.dtype
+    )
 
     q_out = torch.empty_like(q_c)
     k_out = torch.empty_like(k_c)
@@ -462,9 +507,14 @@ def triton_fused_gqa_rope_qk(
             sin_c,
             q_out,
             k_out,
-            q_c.stride(0), q_c.stride(1), q_c.stride(2),
-            k_c.stride(0), k_c.stride(1), k_c.stride(2),
-            stride_cb, stride_cs,
+            q_c.stride(0),
+            q_c.stride(1),
+            q_c.stride(2),
+            k_c.stride(0),
+            k_c.stride(1),
+            k_c.stride(2),
+            stride_cb,
+            stride_cs,
             S,
             Hq=Hq,
             Hkv=Hkv,
@@ -481,9 +531,14 @@ def triton_fused_gqa_rope_qk(
             sin_c,
             q_out,
             k_out,
-            q_c.stride(0), q_c.stride(1), q_c.stride(2),
-            k_c.stride(0), k_c.stride(1), k_c.stride(2),
-            stride_cb, stride_cs,
+            q_c.stride(0),
+            q_c.stride(1),
+            q_c.stride(2),
+            k_c.stride(0),
+            k_c.stride(1),
+            k_c.stride(2),
+            stride_cb,
+            stride_cs,
             S,
             Hq=Hq,
             Hkv=Hkv,
@@ -498,6 +553,7 @@ def triton_fused_gqa_rope_qk(
 # ==============================================================================
 # 4. Fused Linear + Cross-Entropy (Chunked GEMM + Triton Online-Softmax In-Place Grad)
 # ==============================================================================
+
 
 @triton.jit
 def _online_ce_fwd_bwd_inplace_kernel(
@@ -520,7 +576,11 @@ def _online_ce_fwd_bwd_inplace_kernel(
         if HAS_GRAD:
             for v_start in range(0, V, BLOCK_V):
                 offs = v_start + tl.arange(0, BLOCK_V)
-                tl.store(row_ptr + offs, tl.zeros([BLOCK_V], dtype=Logits_ptr.dtype.element_ty), mask=offs < V)
+                tl.store(
+                    row_ptr + offs,
+                    tl.zeros([BLOCK_V], dtype=Logits_ptr.dtype.element_ty),
+                    mask=offs < V,
+                )
         return
 
     # Pass 1: Online LogSumExp
@@ -630,7 +690,11 @@ class FusedLinearCrossEntropyFunction(torch.autograd.Function):
         V = weight.shape[0]
         assert weight.shape[1] == H and targets.numel() == M
 
-        h_2d = hidden.view(M, H) if hidden.is_contiguous() else hidden.contiguous().view(M, H)
+        h_2d = (
+            hidden.view(M, H)
+            if hidden.is_contiguous()
+            else hidden.contiguous().view(M, H)
+        )
         w_2d = weight if weight.is_contiguous() else weight.contiguous()
         # 使用 reshape + contiguous 支持 Causal LM 标准偏移切片 `labels[:, 1:]` 及任意步长视图
         t_1d = targets.reshape(M).to(torch.int64).contiguous()
@@ -652,8 +716,14 @@ class FusedLinearCrossEntropyFunction(torch.autograd.Function):
 
         if M > 0:
             actual_chunk = min(M, chunk_size)
-            logits_buf = torch.empty((actual_chunk, V), dtype=h_2d.dtype, device=hidden.device)
-            block_v = 8192 if V >= 8192 else (2048 if V >= 2048 else triton.next_power_of_2(V))
+            logits_buf = torch.empty(
+                (actual_chunk, V), dtype=h_2d.dtype, device=hidden.device
+            )
+            block_v = (
+                8192
+                if V >= 8192
+                else (2048 if V >= 2048 else triton.next_power_of_2(V))
+            )
             warps = 16 if block_v >= 8192 else 8
 
             for start in range(0, M, actual_chunk):
@@ -702,10 +772,16 @@ class FusedLinearCrossEntropyFunction(torch.autograd.Function):
             saved.append(grad_w)
         ctx.save_for_backward(*saved)
 
-        total_loss = losses.sum() if M > 0 else torch.zeros((), dtype=torch.float32, device=hidden.device)
+        total_loss = (
+            losses.sum()
+            if M > 0
+            else torch.zeros((), dtype=torch.float32, device=hidden.device)
+        )
         if is_mean:
             denom = valid_cnt_t.clamp(min=1).to(torch.float32)
-            out_loss = torch.where(valid_cnt_t > 0, total_loss / denom, torch.zeros_like(total_loss))
+            out_loss = torch.where(
+                valid_cnt_t > 0, total_loss / denom, torch.zeros_like(total_loss)
+            )
         else:
             out_loss = total_loss
         return out_loss

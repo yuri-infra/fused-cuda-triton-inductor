@@ -10,7 +10,7 @@ import glob
 import os
 import re
 import subprocess
-from typing import Dict, Tuple
+
 import torch
 import torch.utils.cpp_extension as cpp_ext
 
@@ -40,7 +40,9 @@ def _detect_nvcc_gencode_flags() -> list[str]:
     major, minor = torch.cuda.get_device_capability(0)
     cc = major * 10 + minor
 
-    out = subprocess.check_output(["nvcc", "--version"]).decode("utf-8", errors="replace")
+    out = subprocess.check_output(["nvcc", "--version"]).decode(
+        "utf-8", errors="replace"
+    )
     if "release 12.6" in out or "release 12.4" in out or "release 12.1" in out:
         target_cc = min(cc, 89)
         return [
@@ -62,8 +64,11 @@ def get_cuda_rmsnorm_ext():
     if _EXT_MOD is not None:
         return _EXT_MOD
 
-    if not hasattr(torch.ops, "ai_infra") or not hasattr(torch.ops.ai_infra, "fused_rmsnorm"):
+    if not hasattr(torch.ops, "ai_infra") or not hasattr(
+        torch.ops.ai_infra, "fused_rmsnorm"
+    ):
         from . import custom_ops as _ensure_schema  # noqa: F401
+
         if _EXT_MOD is not None:
             return _EXT_MOD
 
@@ -85,18 +90,22 @@ def get_cuda_rmsnorm_ext():
         verbose=False,
     )
     so_candidates = glob.glob(os.path.join(build_dir, f"{ext_name}*.so"))
-    _EXT_SO_PATH = so_candidates[0] if so_candidates else getattr(_EXT_MOD, "__file__", "")
+    _EXT_SO_PATH = (
+        so_candidates[0] if so_candidates else getattr(_EXT_MOD, "__file__", "")
+    )
     return _EXT_MOD
 
 
-def inspect_cuda_ext_ptx_stats() -> Dict[str, int]:
+def inspect_cuda_ext_ptx_stats() -> dict[str, int]:
     """对编译生成的 `.so` 执行 `cuobjdump --dump-ptx` 指令统计，实证 128-bit 向量化与 Warp 蝶形规约"""
     get_cuda_rmsnorm_ext()
     ensure_linux_cuda_toolchain()
     if not _EXT_SO_PATH or not os.path.isfile(_EXT_SO_PATH):
         return {"ld_v4_u32": 0, "st_v4_u32": 0, "shfl_bfly": 0, "bar_sync": 0}
 
-    ptx = subprocess.check_output(["cuobjdump", "--dump-ptx", _EXT_SO_PATH]).decode("utf-8", errors="replace")
+    ptx = subprocess.check_output(["cuobjdump", "--dump-ptx", _EXT_SO_PATH]).decode(
+        "utf-8", errors="replace"
+    )
     return {
         "ld_v4_u32": len(re.findall(r"ld\.global(?:\.nc)?\.v4\.u32", ptx)),
         "st_v4_u32": len(re.findall(r"st\.global\.v4\.u32", ptx)),
@@ -110,7 +119,7 @@ def cuda_fused_rmsnorm_residual(
     residual: torch.Tensor,
     weight: torch.Tensor,
     eps: float = 1e-6,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """通过 PyBind11 直接调用原生 CUDA C++ (.cu) 实现的 Fused Add + RMSNorm"""
     ext = get_cuda_rmsnorm_ext()
     return ext.fused_add_rmsnorm(x, residual, weight, float(eps))

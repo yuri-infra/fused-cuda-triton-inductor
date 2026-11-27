@@ -15,6 +15,7 @@ import os
 import statistics
 import sys
 import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -25,20 +26,20 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from ai_infra_fused_ops import (
+    Llama3DecoderStack,
     cuda_fused_rmsnorm_residual,
-    inspect_cuda_ext_ptx_stats,
-    triton_fused_rmsnorm_residual,
-    triton_fused_gqa_rope_qk,
-    triton_fused_linear_cross_entropy,
+    disable_inductor_fusion_pass,
     eager_add_rmsnorm_fp32,
     eager_gqa_rope_qk,
-    inductor_fusion_pass,
-    disable_inductor_fusion_pass,
-    reset_compile_counters,
     get_compile_counters,
-    reset_runtime_counters,
     get_runtime_counters,
-    Llama3DecoderStack,
+    inductor_fusion_pass,
+    inspect_cuda_ext_ptx_stats,
+    reset_compile_counters,
+    reset_runtime_counters,
+    triton_fused_gqa_rope_qk,
+    triton_fused_linear_cross_entropy,
+    triton_fused_rmsnorm_residual,
 )
 
 
@@ -60,7 +61,9 @@ def measure_sustained_d2d_bw_gbps(device: torch.device) -> float:
     for _ in range(10):
         dst.copy_(src)
     torch.cuda.synchronize()
-    ms = triton.testing.do_bench(lambda: dst.copy_(src), warmup=20, rep=80)
+    ms = triton.testing.do_bench(
+        lambda _dst=dst, _src=src: _dst.copy_(_src), warmup=20, rep=80
+    )
     total_rw_bytes = 2.0 * n_bytes
     bw = (total_rw_bytes / (ms * 1e-3)) / 1e9
     del src, dst
@@ -92,7 +95,12 @@ def bench_add_rmsnorm_4way(device: torch.device, sustained_bw: float, theo_bw: f
         (1, 4096, torch.float16, "Decode 单步 `[1, 4096]` FP16"),
         (8, 4096, torch.float16, "Decode 小批次 `[8, 4096]` FP16"),
         (4096, 4096, torch.float16, "Prefill `[4096, 4096]` FP16 (32MB 含 L2 增益)"),
-        (16384, 4096, torch.float16, "大吞吐 `[16384, 4096]` FP16 (512MB 纯 HBM 持续区)"),
+        (
+            16384,
+            4096,
+            torch.float16,
+            "大吞吐 `[16384, 4096]` FP16 (512MB 纯 HBM 持续区)",
+        ),
         (4096, 4096, torch.float32, "FP32 向量化 `[4096, 4096]` FP32"),
     ]
 
@@ -114,11 +122,27 @@ def bench_add_rmsnorm_4way(device: torch.device, sustained_bw: float, theo_bw: f
                 cuda_fused_rmsnorm_residual(x, r, w, 1e-6)
             torch.cuda.synchronize()
 
-            us_eager = triton.testing.do_bench(lambda: eager_m(x, r, w), warmup=20, rep=80) * 1e3
-            us_tri = triton.testing.do_bench(lambda: triton_fused_rmsnorm_residual(x, r, w, 1e-6), warmup=20, rep=80) * 1e3
+            us_eager = (
+                triton.testing.do_bench(
+                    lambda _m=eager_m, _x=x, _r=r, _w=w: _m(_x, _r, _w),
+                    warmup=20,
+                    rep=80,
+                )
+                * 1e3
+            )
+            us_tri = (
+                triton.testing.do_bench(
+                    lambda _x=x, _r=r, _w=w: triton_fused_rmsnorm_residual(
+                        _x, _r, _w, 1e-6
+                    ),
+                    warmup=20,
+                    rep=80,
+                )
+                * 1e3
+            )
             ms_comp, ms_cuda = aba_median_bench(
-                lambda: comp_m(x, r, w),
-                lambda: cuda_fused_rmsnorm_residual(x, r, w, 1e-6),
+                lambda _m=comp_m, _x=x, _r=r, _w=w: _m(_x, _r, _w),
+                lambda _x=x, _r=r, _w=w: cuda_fused_rmsnorm_residual(_x, _r, _w, 1e-6),
                 rounds=5,
                 warmup=15,
                 rep=60,
@@ -139,7 +163,9 @@ def bench_add_rmsnorm_4way(device: torch.device, sustained_bw: float, theo_bw: f
                 "cuda_vs_comp": us_comp / us_cuda,
                 "cuda_vs_eager": us_eager / us_cuda,
                 "bw_cuda": bw_cuda,
-                "pct_sustained": (bw_cuda / sustained_bw * 100.0) if sustained_bw > 0 else 0.0,
+                "pct_sustained": (bw_cuda / sustained_bw * 100.0)
+                if sustained_bw > 0
+                else 0.0,
                 "pct_theo": (bw_cuda / theo_bw * 100.0) if theo_bw > 0 else 0.0,
             }
         )
@@ -177,10 +203,19 @@ def bench_gqa_rope(device: torch.device):
                 triton_fused_gqa_rope_qk(q, k, cos, sin)
             torch.cuda.synchronize()
 
-            us_eager = triton.testing.do_bench(lambda: eager_m(q, k, cos, sin), warmup=20, rep=80) * 1e3
+            us_eager = (
+                triton.testing.do_bench(
+                    lambda _m=eager_m, _q=q, _k=k, _c=cos, _s=sin: _m(_q, _k, _c, _s),
+                    warmup=20,
+                    rep=80,
+                )
+                * 1e3
+            )
             ms_comp, ms_tri = aba_median_bench(
-                lambda: comp_m(q, k, cos, sin),
-                lambda: triton_fused_gqa_rope_qk(q, k, cos, sin),
+                lambda _m=comp_m, _q=q, _k=k, _c=cos, _s=sin: _m(_q, _k, _c, _s),
+                lambda _q=q, _k=k, _c=cos, _s=sin: triton_fused_gqa_rope_qk(
+                    _q, _k, _c, _s
+                ),
                 rounds=5,
                 warmup=15,
                 rep=60,
@@ -221,7 +256,11 @@ def bench_fused_linear_cross_entropy(device: torch.device):
         loss = F.cross_entropy(F.linear(h, w), targets)
         loss.backward()
 
-    compiled_fn = torch.compile(lambda h, w: F.cross_entropy(F.linear(h, w), targets), backend="inductor", dynamic=False)
+    compiled_fn = torch.compile(
+        lambda h, w: F.cross_entropy(F.linear(h, w), targets),
+        backend="inductor",
+        dynamic=False,
+    )
 
     def compile_step(h, w):
         loss = compiled_fn(h, w)
@@ -264,7 +303,9 @@ def bench_fused_linear_cross_entropy(device: torch.device):
             sample_ms.append((time.perf_counter() - t0) * 1000.0)
 
         med_ms = statistics.median(sample_ms)
-        total_peak_delta_mb = (torch.cuda.max_memory_allocated(device) - base_mem) / (1024.0 * 1024.0)
+        total_peak_delta_mb = (torch.cuda.max_memory_allocated(device) - base_mem) / (
+            1024.0 * 1024.0
+        )
         extra_act_mb = max(0.0, total_peak_delta_mb - leaf_grad_mb)
         del h, w
         torch.cuda.empty_cache()
@@ -326,20 +367,22 @@ def bench_e2e_inductor_pass_aba(device: torch.device):
     recorded_comp_hits = {}
     recorded_run_calls = {}
 
+    def _compile_entry(mod: nn.Module):
+        @torch.compile(backend="inductor", dynamic=False)
+        def _run(t_in: torch.Tensor) -> torch.Tensor:
+            return mod(t_in)
+
+        return _run
+
     with torch.inference_mode():
         for idx, (label, shape) in enumerate(workloads):
             inp = torch.randn(*shape, dtype=torch.float16, device=device)
             model_def = copy.deepcopy(base_model)
             model_cus = copy.deepcopy(base_model)
 
-            # 1. 构造两套独立 CodeType 入口与模型副本，使默认编译与自定义编译可在同一进程内零重编译 ABA 交替执行
-            @torch.compile(backend="inductor", dynamic=False)
-            def m_default(t_in):
-                return model_def(t_in)
-
-            @torch.compile(backend="inductor", dynamic=False)
-            def m_custom(t_in):
-                return model_cus(t_in)
+            # 1. 构造两套独立编译入口与模型副本，使默认编译与自定义编译可在同一进程内零重编译 ABA 交替执行
+            m_default = _compile_entry(model_def)
+            m_custom = _compile_entry(model_cus)
 
             disable_inductor_fusion_pass()
             torch._dynamo.reset()
@@ -352,7 +395,9 @@ def bench_e2e_inductor_pass_aba(device: torch.device):
             _ = m_default(inp)
             torch.cuda.synchronize()
             def_cnt = get_runtime_counters()
-            assert def_cnt == zero_calls, f"缓存串扰告警：默认 compile 路径触发了自定义算子 {def_cnt}！"
+            assert def_cnt == zero_calls, (
+                f"缓存串扰告警：默认 compile 路径触发了自定义算子 {def_cnt}！"
+            )
 
             # 2. 在隔离 FXGraphCache 的上下文内编译自定义模型
             with inductor_fusion_pass():
@@ -367,7 +412,9 @@ def bench_e2e_inductor_pass_aba(device: torch.device):
             reset_runtime_counters()
             _ = m_default(inp)
             torch.cuda.synchronize()
-            assert get_runtime_counters() == zero_calls, "默认路径在自定义编译后发生串扰！"
+            assert get_runtime_counters() == zero_calls, (
+                "默认路径在自定义编译后发生串扰！"
+            )
 
             reset_runtime_counters()
             _ = m_custom(inp)
@@ -380,10 +427,12 @@ def bench_e2e_inductor_pass_aba(device: torch.device):
                 recorded_run_calls = cus_cnt
 
             # 3. 执行 Eager 测量与 5 轮 ABA 交替中位数评测 (Def1 -> Cus -> Def2)
-            ms_eager = triton.testing.do_bench(lambda: base_model(inp), warmup=15, rep=60)
+            ms_eager = triton.testing.do_bench(
+                lambda _m=base_model, _x=inp: _m(_x), warmup=15, rep=60
+            )
             ms_default, ms_custom = aba_median_bench(
-                lambda: m_default(inp),
-                lambda: m_custom(inp),
+                lambda _m=m_default, _x=inp: _m(_x),
+                lambda _m=m_custom, _x=inp: _m(_x),
                 rounds=5,
                 warmup=15,
                 rep=60,
@@ -414,8 +463,12 @@ def main():
     ptx_stats = inspect_cuda_ext_ptx_stats()
 
     print("=" * 84)
-    print(f"[Hardware] {props.name} (CC {props.major}.{props.minor}, {props.multi_processor_count} SMs, {props.total_memory/(1024**3):.2f} GB)")
-    print(f"[Roofline] Theoretical Peak: {theo_bw:.1f} GB/s | Measured 256MB Sustained D2D: {sustained_bw:.1f} GB/s ({sustained_bw/theo_bw*100:.1f}%)")
+    print(
+        f"[Hardware] {props.name} (CC {props.major}.{props.minor}, {props.multi_processor_count} SMs, {props.total_memory / (1024**3):.2f} GB)"
+    )
+    print(
+        f"[Roofline] Theoretical Peak: {theo_bw:.1f} GB/s | Measured 256MB Sustained D2D: {sustained_bw:.1f} GB/s ({sustained_bw / theo_bw * 100:.1f}%)"
+    )
     print(f"[PTX Audit] {ptx_stats}")
     print("=" * 84)
 
@@ -528,7 +581,9 @@ def main():
     )
 
     report = "\n".join(lines) + "\n"
-    out_p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_gpu_benchmark_report.md")
+    out_p = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "local_gpu_benchmark_report.md"
+    )
     with open(out_p, "w", encoding="utf-8") as f:
         f.write(report)
 
